@@ -1,23 +1,25 @@
-$ProcColl = @{} # Use a hashtable for efficient duplicate removal and port aggregation
+$ProcColl = @{}
 $listenPorts = Get-NetTCPConnection | Where-Object {$_.OwningProcess -ne 0} | Select-Object LocalAddress, LocalPort, RemoteAddress, OwningProcess
 
 foreach ($port in $listenPorts) {
     $ProcNm = Get-CimInstance Win32_Process -Filter "ProcessId = '$($port.OwningProcess)'"
-    if ($ProcNm) { # Check if process exists (it might have terminated)
+    if ($ProcNm) {
         $ProcessKey = "{0}-{1}-{2}" -f $ProcNm.ProcessId, $ProcNm.ProcessName, (Invoke-CimMethod -InputObject $ProcNm -MethodName GetOwner).user
         if (-not $ProcColl.ContainsKey($ProcessKey)) {
             $output = [PSCustomObject]@{
                 ProcessName = $ProcNm.ProcessName
                 ProcessID = $ProcNm.ProcessId
                 ProcessOwner = (Invoke-CimMethod -InputObject $ProcNm -MethodName GetOwner).user
-                TcpPorts = @() # Initialize an array for ports
+                TcpPorts = [System.Collections.Generic.List[int]]::new() # Use List[int]
                 WorkingSetMB = [Math]::Round(($ProcNm.WorkingSetSize / 1MB), 2)
                 ThreadCount = $ProcNm.ThreadCount
                 HandleCount = $ProcNm.HandleCount
             }
             $ProcColl[$ProcessKey] = $output
         }
-        $ProcColl[$ProcessKey].TcpPorts += $port.LocalPort
+        if ($ProcColl[$ProcessKey].TcpPorts -notcontains $port.LocalPort) { # Check for existing ports
+            $ProcColl[$ProcessKey].TcpPorts.Add($port.LocalPort) # Use Add() for List
+        }
     }
 }
 
@@ -27,9 +29,9 @@ $ProcColl.Values | ForEach-Object {
         ProcessID = $_.ProcessID
         ProcessName = $_.ProcessName
         ProcessOwner = $_.ProcessOwner
-        TcpPorts = ($_.TcpPorts -join ',')
+        TcpPorts = ($_.TcpPorts | Sort-Object) -join ',' # Directly sort and join the List
         WorkingSetMB = if ($_.WorkingSetMB -lt 1) { "<1" } else { $_.WorkingSetMB }
         ThreadCount = $_.ThreadCount
         HandleCount = $_.HandleCount
     }
-} | Sort-Object ProcessID | ft -AutoSize
+} | Sort-Object ProcessID | Format-Table -AutoSize
